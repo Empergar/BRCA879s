@@ -5,7 +5,6 @@ date: "2024-02-14"
 output: pdf_document
 ---
 
-Repositorio de Github: https://github.com/Empergar/BRCA879s
 
 
 ---
@@ -33,6 +32,8 @@ Luego aplicar SURVIVAL Y ASURI.
 ---
 
 # Análisis de Datos BRCA 879s
+
+Repositorio de Github: https://github.com/Empergar/BRCA879s
 
 El conjunto de datos BRCA 879s consiste en datos de expresión génica (ExprMX) de 20501 genes en 879 muestras, junto con datos fenotípicos (PhenoDT) de supervivencia global (OS) y supervivencia libre de enfermedad (DFS).
 
