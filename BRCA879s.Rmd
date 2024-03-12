@@ -5,35 +5,33 @@ date: "2024-02-14"
 output: pdf_document
 ---
 
-
-
----
 ## Objetivos anotados:
 
-**BRCA 879s** -> ExprMX 20501g x 879s
-              -> PhenoDT - OS
-                         - DFS
+---
+**BRCA 879s** -\> ExprMX 20501g x 879s -\> PhenoDT - OS - DFS
 
-Saber leerlo en R y hacer los boxplots correspondientes, 
-                          la disribucion de los datos, 
-                          analizar la varianza, 
-                          id pheno -> sample...
+Saber leerlo en R y hacer los boxplots correspondientes, la disribucion de los datos, analizar la varianza, id pheno -\> sample...
 
-IDC -> Ductal
-ILC -> Lobular
+IDC -\> Ductal ILC -\> Lobular
 
-biomarcadores -> ERS PGR HER2 (genes)
-                 ERS-IHC, PGR-IHC, HER2-IHC (prot IHC) parcial
-stage
+biomarcadores -\> ERS PGR HER2 (genes) ERS-IHC, PGR-IHC, HER2-IHC (prot IHC) parcial stage
 
 Luego aplicar SURVIVAL Y ASURI.
 
 (i) Explorar y analizar bien este tipo de datos en R transcriptómicos, asi como visualizarlos de distintas formas (manejando boxplots, volcanoplots, MvAplots, heatmaps, PCA, etc).
 ---
 
+### Añadido nuevo:
+
+---
+Aplicar el protocolo RNA-seq analysis is easy as 1-2-3 with limma, Glimma and edgeR de forma completa.
+
+Añadir una nueva categoría, tenemos incialmente solo 2 --> Basal y LUminal A, ahora de forma excluyente tendremos 3, contando con los Her2 expresados de estas muestras.
+---
+
 # Análisis de Datos BRCA 879s
 
-Repositorio de Github: https://github.com/Empergar/BRCA879s
+Repositorio de Github: <https://github.com/Empergar/BRCA879s>
 
 El conjunto de datos BRCA 879s consiste en datos de expresión génica (ExprMX) de 20501 genes en 879 muestras, junto con datos fenotípicos (PhenoDT) de supervivencia global (OS) y supervivencia libre de enfermedad (DFS).
 
@@ -76,6 +74,9 @@ if (!requireNamespace("edgeR", quietly = TRUE)) {
 #if (!requireNamespace("asuri", quietly = TRUE)) {
 #   install.packages("~/comprimidos/asuri-main/asuri_0.2.2.tar.gz",  repos = NULL, type = #"source")
 #}
+if (!requireNamespace("Homo.sapiens", quietly = TRUE)) {
+    BiocManager::install("Homo.sapiens")
+}
 
 #Carga de las librerias
 library(readxl)
@@ -85,7 +86,9 @@ library(Glimma)
 library(edgeR)
 library(asuri)
 library(ggcorrplot)
-
+library(Homo.sapiens)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
 ```
 
 ## Lectura de Datos
@@ -94,10 +97,10 @@ Primero, leeremos los datos de expresión génica y los datos fenotípicos:
 
 ```{r}
 #Matriz de expresión
-mExpr879s <- read.delim("dataset/mExpr20501g879s_toEmma.txt", sep=",", header=TRUE, stringsAsFactors=FALSE)
+mExpr879s <- read.delim("../dataset/mExpr20501g879s_toEmma.txt", sep=",", header=TRUE, stringsAsFactors=FALSE)
 
 #Matriz de fenotipos
-phenoData <-read_excel("dataset/BRCA_TCGA_879s_phenoData_21May2018_PAM50plus_toEmma.xlsx")
+phenoData <-read_excel("../dataset/BRCA_TCGA_879s_phenoData_21May2018_PAM50plus_toEmma.xlsx")
 ```
 
 Para obtener una comprensión inicial de los datos y las variables con las que estamos trabajando en nuestro análisis:
@@ -112,7 +115,7 @@ colnames(phenoData)
 
 Si mantenemos los datos intactos, como no se ha proporcionado ninguna información sobre si las columnas 1 y 3 del objeto son iguales o diferentes, hacemos una verificación para asegurarse de que las columnas 1 y 3 en el objeto phenoData contengan los mismos valores de expresión. Si son iguales, se procede a generar subtablas para analizar biomarcadores y datos de supervivencia.
 
-Los biomarcadores incluyen información sobre los genes ERS, PGR y HER2, así como sus expresiones correspondientes en la inmunohistoquímica (IHC). Se tiene en cuenta que los marcadores "ERS", "PGR" y "HER2" están codificados como 0 y 1, donde el 1 representa el 0 para evitar problemas. Asimismo, los datos de supervivencia se refieren al estado y los años de supervivencia (OS y DFS, respectivamente).
+Los biomarcadores incluyen información sobre los genes ERS, PGR y HER2, así como sus expresiones correspondientes en la inmunohistoquímica (IHC). Se tiene en cuenta que los marcadores "ERS", "PGR" y "HER2" están codificados como 1 y 2, donde el 1 representa el 0 para evitar problemas. Asimismo, los datos de supervivencia se refieren al estado y los años de supervivencia (OS y DFS, respectivamente).
 
 ```{r}
 areEqual  <- all(phenoData[, 1] == phenoData[, 3])
@@ -121,15 +124,22 @@ areEqual  <- all(phenoData[, 1] == phenoData[, 3])
 if(areEqual) {
   
   #Generacion de subtablas
-  
+ 
   #Matriz IDC de Basales y luminales A
       # Primer filtro: Filtrar por "IDC" en la columna Final_pathology
   IDC <- subset(phenoData, Final_Pathology == "IDC")
       # Segundo filtro: Quedarse con "Basal" y "LumA" en PAM50Plus
   IDC.BasalLumA <- subset(IDC, PAM50plus %in% c("Basal", "LumA"))
-  
-      # Extraemos los IDs de las muestras de interés
-  idsOfInterest <- IDC.BasalLumA$PATIENT_ID
+      #Añadimos un subtipo mas que es el Her2
+  IDC.BasalLumA.withHer2 <- IDC.BasalLumA 
+      # Crear la nueva columna ClasificacionFinal basada en PAM50plus
+  IDC.BasalLumA.withHer2$ClasificacionFinal <- IDC.BasalLumA$PAM50plus
+    # Actualizar la clasificación para aquellos con HER2 == 2
+  IDC.BasalLumA.withHer2$ClasificacionFinal[IDC.BasalLumA.withHer2$HER2 == 2] <- 'HER2'
+
+      # Extraemos los IDs de las muestras de interés, dependiendo de que clasificación tengamos.
+  #idsOfInterest <- IDC.BasalLumA$PATIENT_ID
+  idsOfInterest <- IDC.BasalLumA.withHer2$PATIENT_ID
       # Filtramos 'mx.expr879s' para quedarnos solo con las filas que tienen esos IDs
   expr244s <- mExpr879s[, colnames(mExpr879s) %in% idsOfInterest ]
   
@@ -165,6 +175,7 @@ mx.expr244s <- as.matrix(expr244s)
 mx.phenoData <- as.matrix(phenoData)
 mx.phenoData <- mx.phenoData[order(mx.phenoData[,1]), ]
 mx.IDC.BasalLumA <- as.matrix(IDC.BasalLumA)
+mx.IDC.BasalLumA.withHer2 <- as.matrix(IDC.BasalLumA.withHer2)
 ```
 
 ## Organización de los datos
@@ -182,13 +193,13 @@ samplesToSelect <- round(totalSamples * 0.10)
 selectedSamples <- sample(1:totalSamples, samplesToSelect)
 # Matriz reducida
 mx.expr244s.reduced  <- mx.expr244s[, selectedSamples] 
-mx.phenoData.reduced <- mx.IDC.BasalLumA[selectedSamples,] 
+mx.phenoData.reduced <- mx.IDC.BasalLumA.withHer2[selectedSamples,] 
 ```
 
 Observamos la distribución de los datos crudos
 
 ```{r}
-??boxplot
+#??boxplot
 
 # Boxplot
 boxplot(mx.expr244s.reduced, main="Boxplot de Datos (10%)", ylab="Valores", col="floralwhite")
@@ -197,15 +208,15 @@ boxplot(mx.expr244s.reduced, main="Boxplot de Datos (10%)", ylab="Valores", col=
 Tras esto aplico una transformación logarítmica a los valores de expresión génica para mejorar la interpretación. La función log2() se utiliza para calcular el logaritmo base 2 de los valores de expresión contenidos en la matriz mx.expr244s.reduced. Es común sumar 1 a los valores de expresión para evitar el logaritmo de cero, lo cual no está definido matemáticamente y podría resultar en valores infinitos. Esta técnica ayuda a normalizar la distribución de los datos y hace que las diferencias en la expresión génica sean más fáciles de visualizar e interpretar, especialmente cuando se trata de grandes rangos de valores de expresión.
 
 ```{r}
-mx.mExpr244s.reduced.log <- log2(mx.expr244s.reduced + 1)
+mx.expr244s.reduced.log <- log2(mx.expr244s.reduced + 1)
 mx.expr244s.log <- log2(mx.expr244s + 1)
 plot(density(mx.expr244s.log))
 
 # Boxplot
-boxplot(mx.mExpr244s.reduced.log , main="Boxplot de Datos log2 (10%)", ylab="Valores", col="floralwhite")
+boxplot(mx.expr244s.reduced.log , main="Boxplot de Datos log2 (10%)", ylab="Valores", col="floralwhite")
 ```
 
-A continuación, se procede ha hacer el proceso de preparación de datos de expresión genética que implicó dos pasos: filtrado inicial eliminando los casi ceros y después se hace la filtración según un umbral de expresión. 
+A continuación, se procede ha hacer el proceso de preparación de datos de expresión genética que implicó dos pasos: filtrado inicial eliminando los casi ceros y después se hace la filtración según un umbral de expresión.
 
 El filtrado inicial se enfocó en remover genes con niveles de expresión muy bajos en todas las muestras, estableciendo un umbral de expresión mínima detectable en 1 para identificar y eliminar aquellos genes cuya suma total de expresión en todas las muestras fue inferior a este valor. Este paso es crucial para reducir el ruido y concentrarse en genes que potencialmente tienen mayor relevancia biológica. Posteriormente, se aplicó una transformación logarítmica (base 2) a los datos filtrados.
 
@@ -216,25 +227,28 @@ summary(rowSums(mx.expr244s[,]))
 
       # Identifico los genes a quitar (aquellos con suma de expresión inferior a 1)
 genesToRemove <- rownames(mx.expr244s )[rowSums(mx.expr244s) < 1]
-
+genesToRemove <- rownames(mx.expr244s )[rowSums(mx.expr244s) < 10]
+genesToRemove <- rownames(mx.expr244s )[rowSums(mx.expr244s) < 20]
       # Vemos la cantidad de genes a quitar
 length(genesToRemove)
 
      #Los eliminamos del objeto
-mx.mExpr244s.sin1 <- mx.expr244s[rowSums(mx.expr244s) > 1, ]
-
+mx.expr244s.sin1 <- mx.expr244s[rowSums(mx.expr244s) > 1, ]
+mx.expr244s.sin10 <- mx.expr244s[rowSums(mx.expr244s) > 10, ]
+mx.expr244s.sin20 <- mx.expr244s[rowSums(mx.expr244s) > 20, ]
 # Calculamos la logaritmica de nuevo 
-mx.mExpr244s.sin1.log <- log2(mx.expr244s.sin1+ 1)
-
+mx.expr244s.sin1.log <- log2(mx.expr244s.sin1+ 1)
+mx.expr244s.sin10.log <- log2(mx.expr244s.sin10+ 1)
+mx.expr244s.sin20.log <- log2(mx.expr244s.sin15+ 1)
 # Verificar el tamaño de la matriz después de la filtración
 dim(mExpr879s)
-dim(mx.mExpr244s.sin1)
 dim(mx.expr244s.sin1)
+dim(mx.expr244s.sin10)
+dim(mx.expr244s.sin20)
 ```
 
-
 ```{r}
- plot(density(mx.mExpr244s.sin1.log[,1]))
+ plot(density(mx.expr244s.sin20.log[,1]))
 ```
 
 Lo que esta escrito a continuacion no se tiene en cuenta porque es una forma muy radical.
@@ -272,14 +286,12 @@ summary(mxHighExpr)
 
 # Verificar el tamaño de la matriz después de la filtración
 dim(mxHighExpr)
-summary(mxHighExpr)
+#summary(mxHighExpr)
 ```
 
-El proceso de filtrado avanzado de los datos de expresión genética implicó la definición de un umbral de expresión mínima detectable basado en un criterio heurístico, seguido por la identificación de genes que superan este umbral en al menos una muestra.
-Se estableció un umbral de expresión en el 30% de los cuartiles de la distribución de la expresión promedio, permitiendo una selección dirigida de genes activamente expresados para análisis posteriores. Este valor es similar al valor anterior de expresión mínima detectable.
+El proceso de filtrado avanzado de los datos de expresión genética implicó la definición de un umbral de expresión mínima detectable basado en un criterio heurístico, seguido por la identificación de genes que superan este umbral en al menos una muestra. Se estableció un umbral de expresión en el 30% de los cuartiles de la distribución de la expresión promedio, permitiendo una selección dirigida de genes activamente expresados para análisis posteriores. Este valor es similar al valor anterior de expresión mínima detectable.
 
 De esta manera se asegura la exclusión de genes con baja expresión que podrían no contribuir significativamente a los patrones biológicos de interés. La aplicación de este umbral resultó en la retención de 18243 genes, demostrando una selección efectiva basada en la actividad de expresión. Se llevaron a cabo dos filtros paralelos, uno aplicado a la matriz de expresión transformada logarítmicamente y otro a la matriz original de conteos ajustados, garantizando la coherencia en la selección de genes a través de diferentes representaciones de los datos.
-
 
 ```{r}
 # Segundo filtro: Define el umbral de expresión mínima detectable (en este caso es heurístico).
@@ -292,26 +304,25 @@ expressionThreshold <- quantile(averageExpression, probs = 0.30)
 print(paste("Umbral bajo de expresión:", expressionThreshold))
 
 # Encuentra los genes que superan el umbral de expresión en al menos una muestra
-genesAboveThreshold <- apply(mx.mExpr244s.sin1.log, 1, function(x) any(x > umbralExpresion))
-genesAboveThreshold <- apply(mx.mExpr244s.sin1, 1, function(x) any(x > umbralExpresion))
-
+genesAboveThreshold <- apply(mx.expr244s.sin20.log, 1, function(x) any(x > umbralExpresion))
+genesAboveThreshold <- apply(mx.expr244s.sin20, 1, function(x) any(x > umbralExpresion))
 
 # TRUE -> Genes que superan el umbral de expresión en al menos una muestra 
 # FALSE -> Genes que no superan el umbral en ninguna muestra
 table(genesAboveThreshold)
 
 # Nombres de los genes que están por debajo del umbral en todas las muestras 
-genesToKeep <- rownames(mx.mExpr244s.sin1.log)[genesAboveThreshold]
+genesToKeep <- rownames(mx.expr244s.sin20.log)[genesAboveThreshold]
 
 length(genesToKeep) #Coincide con la tabla -> 18243
 
 # Filtra la matriz de expresión para mantener solo los genes que esten expresados en alguna de las muestras
-mx.mExpr244s.filtered.log <- mx.mExpr244s.sin1.log[genesAboveThreshold, ]
-mx.mExpr244s.filtered <- mx.mExpr244s.sin1[genesAboveThreshold, ]
+mx.expr244s.filtered.log <- mx.expr244s.sin20.log[genesAboveThreshold, ]
+mx.expr244s.filtered <- mx.expr244s.sin20[genesAboveThreshold, ]
 
 # Resumen de los genes retenidos
-summary(mx.mExpr244s.filtered.log)
-summary(mx.mExpr244s.filtered)
+#summary(mx.expr244s.filtered.log)
+#summary(mx.expr244s.filtered)
 
 # Imprime el número de genes eliminados y la dimensión de la nueva matriz de expresión
 print(paste("Número de genes eliminados:", length(genesToRemove)))
@@ -321,14 +332,14 @@ print(paste("Número de genes eliminados:", length(genesToRemove)))
 Mostramos de nuevo la distribución de los datos de manera que:
 
 ```{r}
-??boxplot
+#??boxplot
 
 # Boxplot
-boxplot(mx.mExpr244s.filtered.log[, selectedSamples], main="Boxplot de Datos log2", ylab="Valores", col="floralwhite")
+boxplot(mx.expr244s.filtered.log[, selectedSamples], main="Boxplot de Datos log2", ylab="Valores", col="floralwhite")
 ```
 
 ```{r}
-plot(density(mx.mExpr244s.sin1.log), 
+plot(density(mx.expr244s.sin20.log), 
      main="Densidad de la Expresión Génica", 
      xlab="Expresión Log2(Transformada)", 
      ylab="Densidad",
@@ -341,7 +352,7 @@ legend("topright", legend=paste("Mediana:", round(median(mx.mExpr244s.sin1.log),
 ```
 
 ```{r}
-# ESTO NO FUNCIONA
+# --------------ESTO NO FUNCIONA---------------
 
 # Prepara los datos de densidad para ambos conjuntos de datos filtrados
 densLog <- apply(mx.mExpr244s.filtered.log, 2, density)
@@ -370,35 +381,53 @@ legend("topright", legend=c("Log Transformado", "Sin Transformar"), col=c(colors
 
 ```
 
-
 ## Análisis de expresión diferencial.
 
-Preparamos los datos, convertimos los datos en un objeto DGEList para facilitar el análisis estadístico. Primero, utilizamos la matriz completa de expresión génica mx.mExpr879s junto con la clasificación fenotípica de las muestras (phenoData$PAM50plus) para crear este objeto. 
-
-Posteriormente, por razones computacionales, generamos una versión reducida del objeto DGEList usando mx.mExpr879s.reduced. Este enfoque nos permite realizar análisis diferencial de expresión de manera eficiente, considerando las agrupaciones fenotípicas de las muestras.
+Preparamos los datos, convertimos los datos en un objeto DGEList para facilitar el análisis estadístico. Primero, utilizamos la matriz completa de expresión génica mx.mExpr879s junto con la clasificación fenotípica de las muestras (phenoData\$PAM50plus) para crear este objeto.
 
 ```{r}
 # Convertir los datos a un objeto DGEList para edgeR
 # dge <- DGEList(counts=mx.mExpr879s, group=phenoData$PAM50plus)
-dge <- DGEList(counts=mx.mExpr244s.filtered, group=as.data.frame(mx.IDC.BasalLumA)$PAM50plus)
+dge <- DGEList(counts=mx.mExpr244s.filtered, group=as.data.frame(mx.IDC.BasalLumA.withHer2)$ClasificacionFinal)
 ```
 
-Utilizamos la función filterByExpr de edgeR para filtrar genes en nuestro objeto DGEList, basándonos en la expresión y variabilidad entre los grupos definidos en grupo. Los genes seleccionados son aquellos con suficiente expresión y variabilidad, lo que mejora la relevancia para el análisis diferencial.
+Ahora pasamos a organizar la anotción de los genes con la librería homo.sapiens
+
+```{r}
+geneid <- rownames(dge)
+genes <- select(Homo.sapiens, keys=geneid, columns=c("SYMBOL", "TXCHROM"), 
+                keytype="ENTREZID")
+genes <- select(org.Hs.eg.db, keys = geneid, columns = c("SYMBOL", "TXCHROM"), keytype = "ENTREZID")
+
+head(genes)
+```
+
+```{r}
+genes <- genes[!duplicated(genes$ENTREZID),]
+```
+
+```{r}
+dge$genes <- genes
+dge
+```
+
+
+
+Utilizamos la función filterByExpr de edgeR para filtrar genes en nuestro objeto DGEList, basándonos en la expresión. Los genes seleccionados son aquellos con suficiente expresión y variabilidad, lo que mejora la relevancia para el análisis diferencial.
 
 ```{r}
 # Filtrar los genes usando filterByExpr
-group <- as.data.frame(mx.IDC.BasalLumA)$PAM50plus
+group <- as.data.frame(mx.IDC.BasalLumA.withHer2)$ClasificacionFinal
 keep <- filterByExpr(dge, group = group)
 dge <- dge[keep,, keep.lib.sizes=FALSE]
 ```
-
 
 ```{r}
 # Normalizar los datos si fuera necesario
 dge <- calcNormFactors(dge)
 ```
 
-En este análisis, primero convertimos los datos de conteo de genes en conteos por millón (CPM) aplicando logaritmos para normalizar la distribución de los datos, preparándolos para el análisis diferencial de expresión con limma. Definimos una matriz de diseño para comparar grupos específicos dentro de nuestros datos, en este caso, la comparación entre los grupos Basal y LumA. 
+En este análisis, primero convertimos los datos de conteo de genes en conteos por millón (CPM) aplicando logaritmos para normalizar la distribución de los datos, preparándolos para el análisis diferencial de expresión con limma. Definimos una matriz de diseño para comparar grupos específicos dentro de nuestros datos, en este caso, la comparación entre los grupos Basal y LumA.
 
 ```{r}
 # Convertir a CPM
@@ -478,10 +507,9 @@ ggplot(data=volcanoData, aes(x = logFC, y = -log10(PValue))) +
   theme_minimal()  # Usa un tema minimalista
 ```
 
-
 ## MVAplot
 
-Un MvAplot puede crearse con la función plotMA de limma, que muestra la relación entre el cambio medio en la expresión (M) y la intensidad media de la expresión (A) para todos los genes analizados. 
+Un MvAplot puede crearse con la función plotMA de limma, que muestra la relación entre el cambio medio en la expresión (M) y la intensidad media de la expresión (A) para todos los genes analizados.
 
 ```{r}
 limma::plotMA(object=fit2, main="MvA Plot", ylim=c(-10, 10))
@@ -510,7 +538,6 @@ MvA plot (MA plot) utilizando ggplot2, basado en los resultados de un análisis 
 ```{r}
 heatmap(mx.mExpr879s.log, Rowv = NA, Colv = NA, col = heat.colors(256), scale="row", margins=c(5,10))
 ```
-
 
 ```{r}
 install.packages("pheatmap")
@@ -546,15 +573,11 @@ ggplot(pcaData, aes(x = PC1, y = PC2, label = Samples)) +
 
 ## Referencias
 
-  -   http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp/
-  
-  -   https://www.datacamp.com/tutorial/pca-analysis-r
-  
-  title: "BRCA879s"
-author: "eperezga"
-date: "2024-03-08"
-output: pdf_document
----
+-   <http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp/>
+
+-   <https://www.datacamp.com/tutorial/pca-analysis-r>
+
+title: "BRCA879s" author: "eperezga" date: "2024-03-08" output: pdf_document ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
