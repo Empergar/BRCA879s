@@ -1,0 +1,37 @@
+//Para hacer un push con la terminal 
+eval "$(ssh-agent -s)"
+ssh-add ruta/ssh/id_rsa
+ssh -T git@github.com
+git push origin main
+
+//Comprobamos que Git esté instalado
+
+which git
+git --version
+
+//Creamos en GitHUb un repositorio
+
+//Inicializamos un repositorio en local
+git init
+git remote add origin https://github.com/Empergar/"nombreDelRepo"
+git config remote.origin.url git@github.com:Empergar/BRCA879s.git
+git config --global user.email eperezga.inf@upsa.es
+git config --global user.name eperezga
+
+git branch -M main
+git add .
+git commit -m "first commit"
+git push -u origin main
+
+
+
+//SSH
+ls -al ~/.ssh
+ssh-keygen -t rsa -b 4096 -C eperezga.inf@upsa.es
+eval "$(ssh-agent -s)"
+ssh-add /data/emmadt/ssh/id_rsa
+cat /data/emmadt/ssh/id_rsa.pub
+
+//Después vamos a Github y cambiamos el ssh
+ssh -T git@github.com
+
