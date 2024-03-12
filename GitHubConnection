@@ -1,37 +1,53 @@
-//Para hacer un push con la terminal 
-eval "$(ssh-agent -s)"
-ssh-add ruta/ssh/id_rsa
-ssh -T git@github.com
-git push origin main
 
-//Comprobamos que Git esté instalado
+******************************************************************************
+     # Conexión con GITHUB #
+******************************************************************************
 
+# Verificar si Git está instalado y mostrar su versión
 which git
 git --version
 
-//Creamos en GitHUb un repositorio
+******************************************************************************
+     # Configuración GITHUB creación del repositorio #
+******************************************************************************
 
-//Inicializamos un repositorio en local
+# Configuración de Git con tus credenciales
+git config --global user.email "eperezga.inf@upsa.es"
+git config --global user.name "eperezga"
+
+# Inicializar un nuevo repositorio Git local
 git init
-git remote add origin https://github.com/Empergar/"nombreDelRepo"
-git config remote.origin.url git@github.com:Empergar/BRCA879s.git
-git config --global user.email eperezga.inf@upsa.es
-git config --global user.name eperezga
-
+git remote add origin git@github.com:Empergar/BRCA879s.git
 git branch -M main
+
+# Añadir todos los archivos para el commit y hacer el primer commit
 git add .
 git commit -m "first commit"
+
+# Finalmente, hacer push del repositorio local al repositorio remoto en GitHub
 git push -u origin main
 
+******************************************************************************
+     # Configuración y uso de SSH para GitHub #
+******************************************************************************
 
-
-//SSH
+# Verificar si existen claves SSH previas
 ls -al ~/.ssh
-ssh-keygen -t rsa -b 4096 -C eperezga.inf@upsa.es
-eval "$(ssh-agent -s)"
-ssh-add /data/emmadt/ssh/id_rsa
-cat /data/emmadt/ssh/id_rsa.pub
 
-//Después vamos a Github y cambiamos el ssh
+# Generar una nueva clave SSH usando tu correo electrónico
+ssh-keygen -t rsa -b 4096 -C "eperezga.inf@upsa.es"
+
+# Iniciar el agente SSH en background y añadir tu clave SSH
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_rsa
+
+# Mostrar la clave SSH pública para añadirla a GitHub
+cat ~/.ssh/id_rsa.pub
+
+# Asegúrate de añadir la clave SSH a tu cuenta de GitHub antes de continuar
+
+# Verificar la conexión SSH con GitHub
 ssh -T git@github.com
+
+
 
