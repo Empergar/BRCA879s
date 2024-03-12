@@ -49,5 +49,10 @@ cat ~/.ssh/id_rsa.pub
 # Verificar la conexión SSH con GitHub
 ssh -T git@github.com
 
+******************************************************************************
+     # Traer cambios con GitHub #
+******************************************************************************
+
+git pull origin main
 
 
