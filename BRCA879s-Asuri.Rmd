@@ -1,0 +1,470 @@
+---
+title: "BRCA879s"
+author: "eperezga"
+date: "2024-03-20"
+output: pdf_document
+---
+
+# 1. Introducción
+
+Este documentro presenta un análisis exhaustivo de los datos BRCA 879s, centrado específicamente en el cáncer de mama. Proponiendo una exploración y un análisis de este conjunto de datos con un enfoque particular en el estudio de la supervivencia.
+
+El cáncer de mama, siendo una de las enfermedades más prevalentes y estudiadas en el ámbito de la oncología, ofrece un vasto terreno para la investigación científica, especialmente en lo que respecta a la supervivencia de los pacientes. Los datos BRCA 879s, que comprenden información genética detallada, proporcionan una base  para investigar la correlación entre diferentes genes y la supervivencia de los pacientes. Este análisis busca identificar posibles marcadores genéticos asociados con mejores o peores pronósticos.
+
+A lo largo de este estudio, emplearemos varias técnicas de análisis de datos y estadísticas para procesar, analizar y visualizar los datos BRCA 879s. Además de la utilización del paquete *Asuri*, que ofrece un conjunto de funciones robustas para descubrir marcadores de supervivencia genéticos que pueden correlacionarse con una variable clínica/fenotípica. Incorpora funciones para análisis de supervivencia, predicción de riesgo precisa y estratificación de pacientes.
+
+
+# 2. Descarga e introducción del paquete
+
+```{r, echo=FALSE}
+library(formatR)
+library(knitr)
+
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80), tidy=TRUE, fig.pos = "!H")
+```
+
+Para cargar la librería hay que hacerlo desde el apartado Tools/InstallPackages en R teniendo en cuenta que necesitamos tener comprimida la libreriía en .tar.gz
+
+### Para Linux y Mac
+
+``` {bash}
+tar -czvf nombre-del-archivo.tar.gz /ruta/del/directorio-o-archivo
+```
+
+### Para Windows
+
+1.    Instala 7-Zip: Descárgalo desde <https://www.7-zip.org/> e instálalo.
+2.    Selecciona los archivos o carpetas.
+3.    Comprime el archivo.
+
+```{r, message = FALSE, eval = FALSE, tidy=TRUE}
+install.packages("./asuri-main.tar.gz", dependencies=T)
+install.packages("/home/javier/Downloads/asuri-main.tar.gz", repos = NULL, type = "source")
+
+```
+
+### Carga de librerías
+
+```{r, message = FALSE, eval = FALSE, tidy=TRUE, }
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+#BiocManager::install("asuri")
+#install.packages("openxlsx")
+
+# Loading package in R 
+# List of dependencies R (>= 3.6.1):
+# survival, glmnet, siggenes, Biobase, survcomp, scales, ROCR, ggplot2, Rdpack
+library(asuri)
+library(readxl)
+library(dplyr)
+library(limma)
+library(Glimma)
+library(edgeR)
+library(asuri)
+library(ggcorrplot)
+library(Homo.sapiens)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(openxlsx)
+```
+
+# 3. Descripcion de los DataSet 
+
+```{r}
+#Comprobar ruta de trabajo
+#getwd()
+
+#Listar archivos del directorio de trabajo
+#list.files()
+
+#Matriz de expresión
+expr879s <- read.delim("./dataset/mExpr20501g879s_toEmma.txt", sep=",", header=TRUE, stringsAsFactors=FALSE)
+
+#Matriz de fenotipos
+phenoData <-read_excel("./dataset/BRCA_TCGA_879s_phenoData_21May2018_PAM50plus_toEmma.xlsx")
+```
+
+Para obtener una comprensión inicial de los datos y las variables con las que estamos trabajando en nuestro análisis:
+
+```{r}
+# Análisis de las matrices 
+dim(expr879s)
+
+# Ver con que columnas trabajamos
+colnames(phenoData)
+```
+
+Se verifica la consistencia entre las primeras y terceras columnas del data.frame phenoData. Posteriormente, filtra los casos por diagnóstico de carcinoma ductal invasivo (IDC), y dentro de estos, selecciona subtipos específicos (Luminal  A y Basal) según el clasificador PAM50 plus, agregando una clasificación adicional basada en la expresión de HER2. Finalmente, el script filtra y prepara datos de supervivencia correspondientes a los pacientes seleccionados, facilitando así análisis posteriores sobre la supervivencia en función de los subtipos de cáncer identificados.
+
+```{r}
+library(dplyr)
+library(AnnotationDbi)
+
+indexPatients <- match(colnames(expr879s), phenoData$PATIENT_ID)
+phenoData <- phenoData[indexPatients,]
+match(colnames(expr879s), phenoData$PATIENT_ID)
+```
+
+Las variables que corresponden a la supervivencia y que generalmente se consideran importantes en estudios de supervivencia son OS_status y OS_years:
+
+  -   OS_status: Este campo indica el estado de supervivencia del paciente, donde "OS" significa "Overall Survival" (Supervivencia Global). Los valores para este campo suelen ser binarios o categóricos, en este caso binaro, indicando si el paciente estaba vivo o había fallecido al final del período de seguimiento.
+
+  -   OS_years: Esta variable indica la cantidad de años que un paciente ha sobrevivido desde el punto inicial de medición (por ejemplo, diagnóstico o inicio del tratamiento) hasta el último seguimiento o su fallecimiento. Proporciona el tiempo hasta el evento de interés en años.
+  
+Además, si el estudio también estuviera interesado en la supervivencia libre de enfermedad (Disease-Free Survival, DFS), las variables DFS_status y DFS_years también serían de gran importancia:
+
+  -   DFS_status: Similar a OS_status, pero en este caso, indica si el paciente ha tenido una recurrencia o progresión de la enfermedad.
+  
+  -   DFS_years: Indica el tiempo en años desde el punto de medición inicial hasta la recurrencia de la enfermedad, la progresión de la enfermedad o la muerte por cualquier causa.
+  
+Para el estudio de Supervivencia con Asuri no es necesaria la supervivencia libre de enfermedad.
+
+```{r}
+mExpr879s <- as.matrix(expr879s)
+mx.phenoData <- as.matrix(phenoData)
+```
+
+## 4.Preprocesado de los datos quitando 0 y por cuartiles y normalización de los datos
+
+### Preprocesado de los datos
+
+Se procede a la filtración de genes en un conjunto de datos de expresión genética basándose en su nivel de actividad. Se identifican los genes con baja expresión total, estableciendo umbrales de corte en 1, 10 y 20. Los genes que no alcanzan estos umbrales son excluidos para formar nuevos conjuntos de datos. Posteriormente, se aplica una transformación logarítmica a los datos filtrados para normalizar la distribución de la expresión. Finalmente, se evalúa el impacto de esta filtración observando los cambios en el tamaño de las matrices de expresión, lo que ayuda a asegurar que los datos retenidos sean relevantes para análisis posteriores.
+
+```{r}
+#Primer filtrado: Quitamos los casi 0 pero los guardamos usando la funcion rowSums
+
+summary(rowSums(mExpr879s[,]))
+
+      # Identifico los genes a quitar (aquellos con suma de expresión inferior a 1)
+genesToRemove <- rownames(mExpr879s )[rowSums(mExpr879s) < 1]
+genesToRemove <- rownames(mExpr879s )[rowSums(mExpr879s) < 10]
+genesToRemove <- rownames(mExpr879s )[rowSums(mExpr879s) < 20]
+      # Vemos la cantidad de genes a quitar
+length(genesToRemove)
+
+     #Los eliminamos del objeto
+mExpr879s.sin1 <- mExpr879s[rowSums(mExpr879s) > 1, ]
+mExpr879s.sin10 <- mExpr879s[rowSums(mExpr879s) > 10, ]
+mExpr879s.sin20 <- mExpr879s[rowSums(mExpr879s) > 20, ]
+# Calculamos la logaritmica de nuevo 
+mExpr879s.sin1.log <- log2(mExpr879s.sin1+ 1)
+mExpr879s.sin10.log <- log2(mExpr879s.sin10+ 1)
+mExpr879s.sin20.log <- log2(mExpr879s.sin20+ 1)
+# Verificar el tamaño de la matriz después de la filtración
+dim(mExpr879s.sin1)
+dim(mExpr879s.sin10)
+dim(mExpr879s.sin20)
+```
+
+```{r}
+# Fijar la semilla para los numeros random
+set.seed(123)
+# Número total de muestras (columnas)
+totalSamples <- dim(expr248s)[2] 
+# Se acordó que un 5%-20% de las muestras
+samplesToSelect <- round(totalSamples * 0.10) 
+# Índices de muestras seleccionadas
+selectedSamples <- sample(1:totalSamples, samplesToSelect)
+# Matriz reducida
+expr248s.reduced  <- log2(expr248s[, selectedSamples] +1)
+expr248s.sin1.log.reduced  <- expr248s.sin1.log[, selectedSamples]
+
+#Distribucion de los datos en la matriz inicial
+boxplot(expr248s.reduced, 
+        main = "Boxplot de Datos en matriz inicial (10%)", 
+        ylab = "Valores", 
+        col = "floralwhite", 
+        names = 1:ncol(expr248s.reduced), # Esto asigna un número a cada muestra, simplificando el eje X
+        las = 2) 
+```
+
+```{r}
+# Configuración gráfica para mostrar múltiples plots
+par(mfrow=c(1, 3))  # Configura un layout de 3 filas, 1 columna
+
+# Lista de datasets para iterar fácilmente
+list_of_datasets <- list(mExpr879s.sin1.log, mExpr879s.sin10.log, mExpr879s.sin20.log)
+names(list_of_datasets) <- c(">1", ">10", ">20")
+
+# Función para calcular y dibujar el cuartil 30 de la expresión promedio de los genes
+add_quantile_line <- function(dataset) {
+  expr_means <- rowMeans(dataset)  # Calcular la media de expresión para cada gen
+  threshold <- quantile(expr_means, probs = 0.30)  # Calcular el cuantil 30% de las medias
+  abline(h = threshold, col = "red", lwd = 2, lty = 2)  # Dibujar la línea en el boxplot
+}
+
+# Generar un boxplot para cada conjunto de datos
+for (i in seq_along(list_of_datasets)) {
+  # Crear boxplot de las sumas de expresión
+  boxplot(list_of_datasets[[i]], 
+          main = paste("Boxplot de Datos Filtrados", names(list_of_datasets)[i]), 
+          ylab = "Sumas de Expresión", 
+          col = "floralwhite",
+          names = 1:ncol(list_of_datasets[[i]]),  # Asignar un número a cada muestra
+          las = 2,
+          ylim = c(min(unlist(lapply(list_of_datasets, rowSums))), max(unlist(lapply(list_of_datasets, rowSums)))))  # Asegura que todos los gráficos usen la misma escala de Y
+
+  # Agregar línea del cuantil 30 a cada boxplot
+  add_quantile_line(list_of_datasets[[i]] )
+}
+```
+
+Se implementa un segundo filtro en datos de expresión genética basándose en un umbral de expresión mínima detectable.
+Inicialmente, se define un umbral heurístico de expresión mínima (valor de 4), observado a partir de la distribución de los datos. Se calcula la media de la expresión para cada gen en una matriz previamente filtrada y transformada logarítmicamente, y se determina un umbral estadístico tomando el cuartil 30% de estas medias. 
+Posteriormente, se identifican y se mantienen solo aquellos genes que superan este umbral en al menos una muestra, eliminando aquellos que no alcanzan este nivel de expresión. 
+Finalmente, se imprime el número de genes eliminados y se evalúa la dimensión de la nueva matriz de expresión filtrada, garantizando que solo se consideren los datos genéticos más relevantes y robustos para análisis futuros. Este proceso no solo refina los datos para su análisis sino también asegura la eliminación de ruido y mejora la calidad del conjunto de datos para investigaciones posteriores.
+
+```{r}
+# Segundo filtro: Define el umbral de expresión mínima detectable (en este caso es heurístico).
+umbralExpresion <- 4
+
+averageMeanExpression <- rowMeans(mExpr879s.sin1.log)
+averageExpression <- apply(mExpr879s.sin1.log, 1, mean)
+
+# Calcula los cuartiles de la distribución de expresión promedio
+expressionThreshold <- quantile(averageExpression, probs = 0.30)                                    
+
+# Imprimir el valor calculado
+print(paste("Umbral bajo de expresión:", expressionThreshold))
+
+# Encuentra los genes que superan el umbral de expresión en al menos una muestra
+genesAboveThreshold <- apply(mExpr879s.sin20.log, 1, function(x) any(x > umbralExpresion))
+
+# TRUE -> Genes que superan el umbral de expresión en al menos una muestra 
+# FALSE -> Genes que no superan el umbral en ninguna muestra
+table(genesAboveThreshold)
+
+# Nombres de los genes que están por debajo del umbral en todas las muestras 
+genesToKeep <- rownames(mExpr879s.sin20.log)[genesAboveThreshold]
+
+length(genesToKeep) #Coincide con la tabla -> 18243
+
+# Filtra la matriz de expresión para mantener solo los genes que esten expresados en alguna de las muestras
+mExpr879s.filtered.log <-mExpr879s.sin20.log[genesAboveThreshold, ]
+
+# Imprime el número de genes eliminados y la dimensión de la nueva matriz de expresión
+print(paste("Número de genes eliminados:", length(genesToRemove)))
+# print(paste("Dimensiones de la matriz de expresión filtrada:", dim(mx.mExpr244s.filtered)))
+```
+
+### Normalizacion de los datos 
+
+A continuación se utiliza edgeR utilizado en protocolos anteriores de Rnaseq para procesar datos de expresión genética. 
+
+Primero, convierte los datos en un objeto *DGEList*, que es el formato necesario para análisis con edgeR, incorporando tanto los conteos de expresión como la clasificación de las muestras. Luego, se normalizan los datos usando *calcNormFactors*, lo cual ajusta las diferencias de tamaño de muestra y composición de la biblioteca, preparando los datos para análisis estadísticos precisos y comparativos entre grupos.
+
+```{r}
+library(edgeR)
+
+# Convertir los datos a un objeto DGEList para edgeR
+dge <- DGEList(counts=mExpr879s.filtered.log, group=phenoData$PAM50plus)
+
+# Normalizar los datos
+dge <- calcNormFactors(dge)
+```
+
+### Filtrado de Genes y Preparación de Datos para Supervivencia
+
+Se realiza un filtrado de genes en un conjunto de datos de expresión utilizando la función *filterByExpr* de la biblioteca edgeR. Esta función selecciona genes basándose en si son adecuadamente expresados en las diferentes condiciones o grupos de muestras, lo cual es vital para asegurar que los análisis subsecuentes, como los tests de diferencia de expresión, se realicen solo con genes que tienen suficiente información.
+
+*FilterByExpr* utiliza el objeto DGEList y la clasificación final de las muestras para determinar cuáles genes conservar. Los genes seleccionados son aquellos que cumplen con los criterios internos de edgeR para ser considerados expresados de manera suficiente en al menos una de las condiciones definidas. Después, el conjunto de datos dge es actualizado para incluir solo estos genes seleccionados, con la opción keep.lib.sizes=FALSE, que indica que las sumas de las bibliotecas no deben ser conservadas en el objeto resultante.
+
+El problema aparece cuando al hacer este flitrado muchos de los genes conocidos como marcadores al no estar lo suficientemente expresados o que no tengan la suficiente significancia en estas muestras desaparecen. Y en un análisis posterior no pasan el filtro para el entrenamiento del modelo de riesgo multivariante de Cox.
+
+```{r}
+# Filtrar los genes usando filterByExpr
+# keep <- filterByExpr(dge, group = as.data.frame(IDC.BasalLumA.withHer2)$ClasificacionFinal)
+# dge <- dge[keep,, keep.lib.sizes=FALSE]
+```
+
+Convertir los datos normalizados a log CPM es útil para estabilizar la varianza y mejorar la normalidad:
+
+```{r}
+# Convertir a CPM y aplicar logaritmo
+cpmData <- cpm(dge, log=TRUE)
+```
+
+# 5 Análisis de genes unicos como marcardores de supervivencia *geneSurv()* 
+
+*ESR1*
+ESR1 codifica para el receptor de estrógeno, que es una diana crítica en el tratamiento del cáncer de mama. Aproximadamente el 70% de los cánceres de mama son positivos para receptores de estrógeno (ER+), lo que significa que el crecimiento del tumor es promovido por estrógenos.
+  
+Tratamiento: Los inhibidores de la aromatasa y los moduladores selectivos de los receptores de estrógeno (como el tamoxifeno) son tratamientos hormonales dirigidos a tumores ER+. La expresión de ESR1 es un biomarcador importante para determinar la elegibilidad para estos tratamientos.
+  
+*TP53*
+TP53 es conocido como el "guardián del genoma" debido a su papel crítico en la prevención de la oncogénesis. Codifica para la proteína p53, que regula el ciclo celular y funciona como un supresor de tumores mediante la prevención de la proliferación de células con daño en el ADN.
+  
+Mutaciones y cáncer de mama: Las mutaciones en TP53 son comunes en varios tipos de cáncer, incluyendo el cáncer de mama, especialmente en subtipos de alto grado y agresivos como el cáncer de mama triple negativo. La pérdida de la función normal de p53 puede contribuir a la progresión del cáncer permitiendo que las células dañadas se dividan y proliferen.
+
+```{r}
+# Configuración de semilla para reproducibilidad
+set.seed(5)
+
+# Preparación de los datos de tiempo y estado para el análisis de supervivencia
+time <- phenoData$OS_years
+names(time) <- phenoData$PATIENT_ID
+status <- phenoData$OS_status
+names(status) <-phenoData$PATIENT_ID
+
+time2 <- phenoData$DFS_years
+names(time2) <- phenoData$PATIENT_ID
+status2 <- phenoData$DFS_status
+names(status2) <-phenoData$PATIENT_ID
+
+# Comprobar que los nombres en mExpr244s coinciden con los de time y status
+all(names(time) %in% colnames(cpmData))  # Debe retornar TRUE
+all(names(status) %in% colnames(cpmData))  # Debe retornar TRUE
+
+# Extraer datos para el gen ESR1, asegurando que no se pierdan los nombres de las columnas
+esr1_data <- cpmData[match("ESR1", rownames(cpmData)), , drop = FALSE]
+
+names(esr1_data) <- colnames(cpmData)
+names(tp53_data) <- colnames(cpmData)
+names(SUSD3_data) <- colnames(cpmData)
+
+# Asegurarse de que los nombres de las muestras en esr1_data coinciden con los de time y status
+if (all(names(esr1_data) == names(time)) && all(names(esr1_data) == names(status))) {
+  
+    pdf("./output/outputgenesurvOS.pdf", height = 10, width = 10)
+    outputKMOS <- geneSurv(esr1_data, time, status, "ESR1", type="exprs")
+    dev.off()
+    
+    pdf("./output/outputgenesurvDFS.pdf", height = 10, width = 10)
+     outputKM2DFS <- geneSurv(esr1_data, time2, status2, "ESR1", type="exprs")
+    dev.off()
+    
+   
+} else {
+    stop("Los nombres de las muestras no coinciden entre los datos de expresión, tiempo y estado.")
+}
+length(time)
+```
+
+La función devuelve como salida una lista con:
+
+-   *patientExpr*: Vector de clasificación de grupo según el nivel de expresión génica: 2 = alta expresión y 1 = baja expresión.
+-   *patientClassProbality*: Vector de probabilidades de pertenencia para la clasificación.
+-   *logRankTest.pvalue*: El p-valor de la estadística de prueba de log-rank.
+-   *hazard_ratio*: Marco de datos con el ratio de riesgo (Hazard ratio) y el intervalo de confianza para el gen analizado.
+
+## Descubrimiento de genes asociados con factores clínicos o fenotípicos: genePheno()
+
+La función *genePheno()* está diseñada para identificar genes que están asociados con variables clínicas específicas, utilizando un enfoque robusto basado en el algoritmo de Elastic Net. Este método balancea características de las regresiones Lasso y Ridge, optimizando la selección de variables mediante una validación cruzada anidada y enfocándose en la estabilidad de los resultados. Para asegurar la reproducibilidad, se utiliza una estrategia de bootstrap que remuestrea los datos de entrenamiento y genera múltiples listas de genes, evaluando la estabilidad y la correlación de estos genes con la variable clínica.
+
+Antes de aplicar genePheno(), es recomendable reducir la cantidad de características de entrada para mejorar la eficiencia computacional, usando para ello el método *prefilterSAM()* del paquete asuri. Este método filtra genes mediante un algoritmo mejorado de SAM que utiliza bootstrap para determinar el umbral más adecuado basándose en el valor p más bajo obtenido a través de diferentes valores de FDR. Esto resulta en una lista de genes que aparecen consistentemente en al menos el 10% de las iteraciones, asegurando así la relevancia y robustez de los genes seleccionados.
+
+
+Los parámetros de entrada para la función son los siguientes:
+
+  -   *mExpr244ss*: Matriz con datos de expresión normalizados de los genes (filas) en las muestras (columnas). Los nombres de las columnas (colnames(mExpr244s)) deben estar definidos como los nombres de las muestras y los nombres de las filas (rownames(mExpr244s)) como los nombres de los genes.
+  -   *groups_vector*: Vector binario que contiene las etiquetas para los fenotipos. En este ejemplo, groups_vector es IDC.BasalLumA.withHer2$ERS_IHC) .
+FDRfilter: Parámetro de Tasa de Falso Descubrimiento, por defecto 0.05.
+  -   *iter*: Iteraciones, por defecto es 100.
+  -   *percentageFilter*: El porcentaje de genes filtrados, por defecto el 80% en cada iteración de bootstrap.
+
+```{r}
+DE_list_genes <- prefilterSAM(cpmData[,], IDC.BasalLumA.withHer2$ERS_IHC) 
+```
+
+La función DE_list_genes produce una lista de genes ordenados por su valor p (de menor a mayor), los cuales provienen del análisis de expresión diferencial. La función genePheno() se utiliza luego para identificar genes correlacionados con la variable clínica del factor ER, usando como ejemplo la correlación con la proteína ESR1 en tumores.
+
+Parámetros de entrada para genePheno():
+
+  -   *mExpr244s*: Matriz con expresión normalizada de genes. Las filas representan muestras y las columnas, nombres de genes. Solo se incluyen genes significativos tras el análisis diferencial.
+  -   *vectorGroups*: Variable clínica probada, aquí mPheno$ER.IHC, dada como vector binario.
+  -   *vectorSampleID*: Nombres de muestras como en la matriz de expresión.
+  -   *iter*: Número de iteraciones de bootstrap, por defecto 100.
+  -   *numberOfFolds*: Pliegues para validación cruzada, por defecto 10.
+
+
+```{r}
+# Establecer semilla para garantizar la reproducibilidad de los análisis
+set.seed(5)
+
+# Preparar y filtrar la matriz de expresión para el análisis diferencial
+mExpr244ssDE <- cpmData[match(DE_list_genes, rownames(cpmData)),]
+  
+# Transponer la matriz de expresión para el análisis de fenotipo
+tsubset_EXPR379 <- t(subset_EXPR379)
+
+# Verificar y corregir cualquier desalineación entre mPheno y tmExpr244ssDE
+vectorGroups <-  IDC.BasalLumA.withHer2$ERS_IHC[match(rownames(tmExpr244ssDE), IDC.BasalLumA.withHer2$PATIENT_ID)]
+vectorSampleID <-rownames(tmExpr244ssDE)
+
+vectorGroups <-  phenoData$ERS_IHC
+vectorSampleID <-rownames(tmExpr244ssDE)
+
+# Ejecutar el análisis de fenotipos usando genePheno
+Pred_ER.IHC <- genePheno(tsubset_EXPR379, vectorGroups , rownames(tsubset_EXPR379), iter = 100)
+
+# Imprimir resultados del análisis
+print(Pred_ER.IHC$stability)  # Estabilidad de los genes en el análisis
+print(Pred_ER.IHC$betasMedian)  # Valores medianos de beta
+print(Pred_ER.IHC$betasMean)  # Valores medios de beta
+print(Pred_ER.IHC$betasTable)  # Tabla de valores beta
+```
+
+
+```{r}
+names(Pred_ER.IHC)
+# [1] "genes" "listCoeff" "stability" "betasMedian" "betasMean" "betasTable" 
+```
+
+## 5.3 Identificación de marcadores de riesgo genético y predicción de riesgo del paciente: patientRisk()
+
+```{r}
+# Suponiendo que ya tienes la matriz EXPR379 cargada en tu entorno
+# Si no está cargada, primero carga tu matriz de expresión. Por ejemplo, si es un archivo CSV:
+# EXPR379 <- read.csv("ruta/al/archivo.csv", row.names=1)
+
+# Define el vector de genes de interés
+genes_de_interes <- c("AGR3", "AURKA", "C17orf37", "C6orf97", "CA12", "CNKSR1", "CDK12", 
+                      "CWC25", "DNALI1", "ERBB2", "ESR1", "GATA3", "GFRA1", "GRB7", 
+                      "KLC4", "KMO", "MED1", "MKI67", "NANOS1", "NAT1", "NME3", 
+                      "PGAP3", "PGR", "PNMT", "PSMD3", "SIRT3", "SLC15A2", 
+                      "SLC39A6", "SOX11", "STARD3", "TBC1D9", "TFF1", "ZNF552")
+
+# Verifica que todos los genes de interés están en la matriz
+genes_disponibles <- genes_de_interes[genes_de_interes %in% rownames(cpmData)]
+genes_no_disponibles <- genes_de_interes[!genes_de_interes %in% rownames(cpmData)]
+
+# Imprime los genes que no se encontraron en la matriz (si hay alguno)
+if(length(genes_no_disponibles) > 0) {
+  cat("Los siguientes genes no se encontraron en la matriz de expresión:\n")
+  print(genes_no_disponibles)
+}
+
+# Crea el subset de la matriz con los genes disponibles
+subset_EXPR879 <- cpmData[genes_disponibles, ]
+
+# Si quieres ver el resultado
+print(subset_EXPR879)
+
+indexPatients <- match(colnames(subset_EXPR879), phenoData$PATIENT_ID)
+phenoData
+
+timeRisk <- phenoData$OS_years
+names(timeRisk) <- colnames(subset_EXPR879)
+statusRisk <- phenoData$OS_status
+# statusRisk <- ifelse(statusRisk == 1, 0, 1)
+names(statusRisk) <-colnames(subset_EXPR879)
+
+# Entrenamiento del modelo de riesgo multivariante de Cox
+# Aquí se asume que 'time' y 'status' son vectores con nombres alineados con las columnas de mExpr244sSelectedGenes
+pdf("./output/outputPatientRisk4.pdf", height = 10, width = 10)
+set.seed(22)
+multivariate_risk_predicto12 <- patientRisk(subset_EXPR379, timeRisk, statusRisk, 
+                                           method="class.probs",
+                                           filename="risk_model_output")
+dev.off()
+```
+
+Guardamos las salidas importantes en un Excel.
+
+```{r}
+multivariate_risk_predicto12_betasplot <- multivariate_risk_predicto12$betasplot[order(multivariate_risk_predicto12$betasplot$p_value), ]
+write.xlsx(multivariate_risk_predicto12_betasplot, file = "./output/betasplott.xlsx")
+write.xlsx(multivariate_risk_predicto12$table_genes_selected, file = "./output/table_genes_selected.xlsx")
+```
+
